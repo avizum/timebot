@@ -23,8 +23,8 @@ class ZoneData(TypedDict):
 
 
 FORMAT_MAP: Mapping[str, str] = {
-    "%I:%M %p": "12 hour",
-    "%I:%M:%S %p": "12 hour with seconds",
+    "%-I:%M %p": "12 hour",
+    "%-I:%M:%S %p": "12 hour with seconds",
     "%H:%M": "24 hour",
     "%H:%M:%S": "24 hour with seconds",
 }
@@ -58,12 +58,12 @@ class TimeZoneModal(ui.Modal, title="Time Zone Information"):
             options=[
                 discord.SelectOption(
                     label="12 hour",
-                    value="%I:%M %p",
+                    value="%-I:%M %p",
                     description="11:24 PM",
                 ),
                 discord.SelectOption(
                     label="12 hour with seconds",
-                    value="%I:%M:%S %p",
+                    value="%-I:%M:%S %p",
                     description="11:24:05 PM",
                 ),
                 discord.SelectOption(
@@ -101,8 +101,6 @@ class TimeZoneModal(ui.Modal, title="Time Zone Information"):
         self.set_defaults()
 
     def set_defaults(self) -> None:
-        data = self.data
-
         default_exists: bool = any(
             zone["default_zone"] for zone in self.view.data.values()
         )
@@ -112,36 +110,37 @@ class TimeZoneModal(ui.Modal, title="Time Zone Information"):
 
         if default_exists:
             self.default_zone.component.options[1].default = True
-            self.default_zone.description += " (Note: a time zone is already set.)"
+        else:
+            self.default_zone.component.options[0].default = True
 
-        if not data:
+        if not self.data:
             return
 
         assert isinstance(self.time_zone.component, ui.TextInput)
         assert isinstance(self.utc_offset.component, ui.TextInput)
         assert isinstance(self.time_format.component, ui.Select)
 
-        if data["default_zone"] is not None:
+        if self.data["default_zone"] is not None:
             options = self.default_zone.component.options
+            options[0].default = False
             options[1].default = False
 
-            if data["default_zone"] is True:
+            if self.data["default_zone"] == 1:
                 options[0].default = True
-            if data["default_zone"] is False:
+            if self.data["default_zone"] == 0:
                 options[1].default = True
 
-        if data["time_format"]:
-            options = self.time_format.component.options
-            for option in options:
-                if data["time_format"] == option.value:
-                    option.default = True
-                    break
+        options = self.time_format.component.options
+        for option in options:
+            if self.data["time_format"] == option.value:
+                option.default = True
+                break
 
-        if data["time_zone"]:
-            self.time_zone.component.default = data["time_zone"]
+        if self.data["time_zone"]:
+            self.time_zone.component.default = self.data["time_zone"]
 
-        if data["utc_offset"]:
-            self.utc_offset.component.default = data["utc_offset"]
+        if self.data["utc_offset"]:
+            self.utc_offset.component.default = self.data["utc_offset"]
 
     async def on_submit(self, itn: discord.Interaction[Bot]):
         assert isinstance(self.time_zone.component, ui.TextInput)
@@ -282,7 +281,7 @@ class TimeZoneModalButton(ui.Button["SettingsView"]):
 
     async def callback(self, itn: discord.Interaction[Bot]):
         assert self.view is not None
-        if len(self.view.data) > 10:
+        if len(self.view.data) >= 10:
             return await itn.response.send_message(
                 "You cannot have more than 10 time zones saved. Remove some first.",
                 ephemeral=True,
@@ -384,11 +383,8 @@ class TimeContainer(ui.Container):
     ) -> None:
 
         opted, default_zone, default_format = self.parse_time_zones(data)
-
         default_time_now = dt.datetime.now(default_zone)
-
         formatted_times = self.format_times(opted, default_time_now)
-
         time_info = self.create_time_info(
             default_time_now, default_format, user, default_zone
         )
@@ -434,7 +430,7 @@ class TimeContainer(ui.Container):
             else:
                 continue
 
-            name = re.sub(r"([+-]0+)?(:00)?$", "", name)
+            name = re.sub(r"UTC([+-])0?(\d+)(?::00)?", r"UTC\1\2", name)
             is_default_zone = bool(zone["default_zone"])
 
             delta_offset = dt.timedelta(hours=hours, minutes=minutes)
@@ -487,6 +483,14 @@ class TimeContainer(ui.Container):
 class Commands(commands.Cog):
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
+        self.times_message_command = app_commands.ContextMenu(
+            name="Show Time Zones", callback=self.ctx_menu_callback_msg
+        )
+        self.times_user_command = app_commands.ContextMenu(
+            name="Show Time Zones", callback=self.ctx_menu_callback
+        )
+        bot.tree.add_command(self.times_message_command)
+        bot.tree.add_command(self.times_user_command)
 
     @app_commands.command()
     @app_commands.describe(user="Whose time zones you want to see.")
@@ -516,6 +520,31 @@ class Commands(commands.Cog):
         view = ui.LayoutView()
         view.add_item(TimeContainer(data=time_zones, user=user))
         await itn.response.send_message(view=view, ephemeral=True)
+
+    async def ctx_menu_callback(
+        self, itn: discord.Interaction[Bot], member: discord.Member | discord.User
+    ):
+        async with self.bot.pool.acquire() as conn:
+            time_zones: list[ZoneData] = await conn.fetchall(
+                "SELECT * FROM time_zones WHERE user_id = ?",
+                member.id,
+            )  # type: ignore
+
+        if not time_zones:
+            await itn.response.send_message(
+                f"{member.mention} does not have their time zones setup yet.",
+                ephemeral=True,
+            )
+            return
+
+        view = ui.LayoutView()
+        view.add_item(TimeContainer(data=time_zones, user=member))
+        await itn.response.send_message(view=view, ephemeral=True)
+
+    async def ctx_menu_callback_msg(
+        self, itn: discord.Interaction[Bot], message: discord.Message
+    ):
+        await self.ctx_menu_callback(itn, message.author)
 
     @app_commands.command()
     async def settings(self, itn: discord.Interaction[Bot]):
