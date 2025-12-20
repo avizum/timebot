@@ -16,3 +16,6 @@ config.toml
 *.db
 *.db-shm
 *.db-wal
+
+# macOS files
+.DS_Store
