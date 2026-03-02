@@ -31,15 +31,16 @@ FORMAT_MAP: Mapping[str, str] = {
 
 
 class TimeZoneModal(ui.Modal, title="Time Zone Information"):
-    note = ui.TextDisplay(
-        "For daylight saving time support, fill in the **Time Zone** field with a time zone found "
-        "[here.](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones#List) "
-        "Otherwise, enter a UTC Offset."
-    )
     time_zone = ui.Label(
         text="Time Zone or UTC Offset",
         description="Enter a time zone name or UTC offset in the format of ±HH:MM.",
         component=ui.TextInput(placeholder="America/New_York or -05:00", required=True),
+    )
+
+    note = ui.TextDisplay(
+        "For daylight saving time support, enter a time zone found "
+        "[here.](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones#List) "
+        "Otherwise, enter a UTC Offset."
     )
 
     time_format = ui.Label(
@@ -150,16 +151,17 @@ class TimeZoneModal(ui.Modal, title="Time Zone Information"):
                 )
 
         async with self.bot.pool.acquire() as conn:
-            if default_zone:
-                for zone in self.view.data.values():
-                    if zone["default_zone"]:
-                        zone["default_zone"] = False
-                        default_id = zone["id"]
-                        await conn.execute(
-                            "UPDATE time_zones SET default_zone = ? where id = ?",
-                            (False, default_id),
-                        )
-                        break
+            for zone in self.view.data.values():
+                if (zone["time_zone"] == time_zone or zone["utc_offset"] == time_zone) and not self.data:
+                    return await itn.response.send_message("You already have this time zone set up.", ephemeral=True)
+                if default_zone and zone["default_zone"]:
+                    zone["default_zone"] = False
+                    default_id = zone["id"]
+                    await conn.execute(
+                        "UPDATE time_zones SET default_zone = ? where id = ?",
+                        (False, default_id),
+                    )
+
             if not self.data:
                 data: ZoneData = await conn.fetchone(
                     """
@@ -189,7 +191,7 @@ class TimeZoneModal(ui.Modal, title="Time Zone Information"):
         )
 
 
-class TimeZoneRemovalModal(ui.Modal, title="Remove a Time Zone"):
+class TimeZoneRemovalModal(ui.Modal, title="Remove time zones..."):
     select_label = ui.Label(
         text="Time Zone",
         description="Check the time zones you would like to remove.",
