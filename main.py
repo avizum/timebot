@@ -9,6 +9,7 @@ class Bot(commands.Bot):
         super().__init__(
             command_prefix=self.__class__.get_prefix,
             intents=discord.Intents.default(),
+            help_command=None,
         )
 
     async def get_prefix(self, message: discord.Message) -> list[str]:
