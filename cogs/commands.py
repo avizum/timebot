@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import re
 import zoneinfo
-from typing import Mapping, TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, Mapping, TypedDict
 
 import discord
 from discord import app_commands, ui
@@ -31,24 +31,15 @@ FORMAT_MAP: Mapping[str, str] = {
 
 
 class TimeZoneModal(ui.Modal, title="Time Zone Information"):
-    time_zone = ui.Label(
-        text="Time Zone",
-        description="Enter a time zone name.",
-        component=ui.TextInput(placeholder="America/New_York", required=False),
-    )
-
     note = ui.TextDisplay(
-        "For daylight saving time support, fill in **only** the Time Zone field with a time zone found "
-        "[here](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones#List) above.\n"
-        "Otherwise, fill in **only** the UTC Offset field below."
+        "For daylight saving time support, fill in the **Time Zone** field with a time zone found "
+        "[here.](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones#List) "
+        "Otherwise, enter a UTC Offset."
     )
-
-    utc_offset = ui.Label(
-        text="UTC Offset",
-        description="Must be in the format of ±HH:MM. This is ignored if Time Zone is filled in.",
-        component=ui.TextInput(
-            min_length=6, max_length=6, placeholder="-05:00", required=False
-        ),
+    time_zone = ui.Label(
+        text="Time Zone or UTC Offset",
+        description="Enter a time zone name or UTC offset in the format of ±HH:MM.",
+        component=ui.TextInput(placeholder="America/New_York or -05:00", required=True),
     )
 
     time_format = ui.Label(
@@ -81,19 +72,12 @@ class TimeZoneModal(ui.Modal, title="Time Zone Information"):
     )
 
     default_zone = ui.Label(
-        text="Set as default zone?",
-        description="This will be used for comparison with other time zones.",
-        component=ui.Select(
-            options=[
-                discord.SelectOption(label="Yes", value="1"),
-                discord.SelectOption(label="No", value="0"),
-            ],
-        ),
+        text="Default Zone",
+        description="If checked, this will be used for comparison with other time zones.",
+        component=ui.Checkbox(),
     )
 
-    def __init__(
-        self, /, *, bot: Bot, data: ZoneData | None = None, view: SettingsView
-    ) -> None:
+    def __init__(self, /, *, bot: Bot, data: ZoneData | None = None, view: SettingsView) -> None:
         self.bot = bot
         self.data = data
         self.view = view
@@ -101,34 +85,16 @@ class TimeZoneModal(ui.Modal, title="Time Zone Information"):
         self.set_defaults()
 
     def set_defaults(self) -> None:
-        default_exists: bool = any(
-            zone["default_zone"] for zone in self.view.data.values()
-        )
-
-        assert isinstance(self.default_zone.component, ui.Select)
-        assert self.default_zone.description is not None
-
-        if default_exists:
-            self.default_zone.component.options[1].default = True
-        else:
-            self.default_zone.component.options[0].default = True
+        assert isinstance(self.default_zone.component, ui.Checkbox)
 
         if not self.data:
             return
 
         assert isinstance(self.time_zone.component, ui.TextInput)
-        assert isinstance(self.utc_offset.component, ui.TextInput)
         assert isinstance(self.time_format.component, ui.Select)
 
         if self.data["default_zone"] is not None:
-            options = self.default_zone.component.options
-            options[0].default = False
-            options[1].default = False
-
-            if self.data["default_zone"] == 1:
-                options[0].default = True
-            if self.data["default_zone"] == 0:
-                options[1].default = True
+            self.default_zone.component.default = bool(self.data["default_zone"])
 
         options = self.time_format.component.options
         for option in options:
@@ -140,52 +106,46 @@ class TimeZoneModal(ui.Modal, title="Time Zone Information"):
             self.time_zone.component.default = self.data["time_zone"]
 
         if self.data["utc_offset"]:
-            self.utc_offset.component.default = self.data["utc_offset"]
+            self.time_zone.component.default = self.data["utc_offset"]
 
     async def on_submit(self, itn: discord.Interaction[Bot]):
         assert isinstance(self.time_zone.component, ui.TextInput)
-        assert isinstance(self.utc_offset.component, ui.TextInput)
         assert isinstance(self.time_format.component, ui.Select)
-        assert isinstance(self.default_zone.component, ui.Select)
+        assert isinstance(self.default_zone.component, ui.Checkbox)
 
-        time_zone = self.time_zone.component.value or None
-        utc_offset = self.utc_offset.component.value or None
+        time_zone = self.time_zone.component.value
+        utc_offset = None
         time_format = self.time_format.component.values[0]
-        default_zone = bool(int(self.default_zone.component.values[0]))
+        default_zone = self.default_zone.component.value
 
-        if not time_zone and not utc_offset:
-            return await itn.response.send_message(
-                "The Time Zone field and the UTC offset cannot be left blank.",
-                ephemeral=True,
-            )
+        try:
+            time_zone = str(zoneinfo.ZoneInfo(time_zone))
+        except zoneinfo.ZoneInfoNotFoundError:
+            split = time_zone.split(":")
+            if len(split) > 1:
+                hours = abs(int(split[0]))
+                minutes = int(split[1])
+                if hours > 24 or (hours == 24 and minutes):
+                    return await itn.response.send_message(
+                        "A UTC offset cannot have more than a 24 hour difference.\n"
+                        "Please enter an offset less than 24 hours.",
+                        ephemeral=True,
+                    )
 
-        if time_zone and utc_offset:
-            utc_offset = None
+                if int(minutes) > 59:
+                    return await itn.response.send_message(
+                        "The UTC offset format is ±HH:MM. The number of minutes you entered exceeded 59.",
+                        ephemeral=True,
+                    )
 
-        if time_zone:
-            try:
-                time_zone = str(zoneinfo.ZoneInfo(time_zone))
-            except zoneinfo.ZoneInfoNotFoundError:
+                utc_offset = time_zone
+                time_zone = None
+
+            else:
                 return await itn.response.send_message(
                     "The time zone you entered is invalid.\n"
-                    "Check your capitalization, spelling, or see all the valid time zones [here.](<https://en.wikipedia.org/wiki/List_of_tz_database_time_zones#List>)",
-                    ephemeral=True,
-                )
-
-        if utc_offset:
-            split = utc_offset.split(":")
-            hours = abs(int(split[0]))
-            minutes = int(split[1])
-            if hours > 24 or (hours == 24 and minutes):
-                return await itn.response.send_message(
-                    "A UTC offset cannot have more than a 24 hour difference.\n"
-                    "Please enter an offset less than 24 hours.",
-                    ephemeral=True,
-                )
-
-            if int(minutes) > 59:
-                return await itn.response.send_message(
-                    "The UTC offset format is ±HH:MM. The number of minutes you entered exceeded 59.",
+                    "Check your capitalization, spelling, or see all the valid time zones [here.](<https://en.wikipedia.org/wiki/List_of_tz_database_time_zones#List>)\n"
+                    "If you are trying to use a UTC offset, ensure you are using the format ±HH:MM.",
                     ephemeral=True,
                 )
 
@@ -223,42 +183,40 @@ class TimeZoneModal(ui.Modal, title="Time Zone Information"):
                 self.view.data[data["id"]] = ZoneData(data)
 
         return await itn.response.send_message(
-            f"Added {time_zone or utc_offset} to your time zones.", ephemeral=True
+            f"Added {time_zone or utc_offset} to your time zones." if not self.data else "Updated timezone.",
+            ephemeral=True,
+            delete_after=10,
         )
 
 
 class TimeZoneRemovalModal(ui.Modal, title="Remove a Time Zone"):
     select_label = ui.Label(
         text="Time Zone",
-        description="Choose the time zones you would like to remove.",
-        component=ui.Select(),
+        description="Check the time zones you would like to remove.",
+        component=ui.CheckboxGroup(),
     )
 
     def __init__(self, /, *, view: SettingsView, zones: dict[int, ZoneData]) -> None:
         self.view = view
         self.zones = zones
-        self.selected: list[str] = []
+        self.checked: list[str] = []
         self.interaction: discord.Interaction[Bot] | None = None
         super().__init__()
 
-        select = self.select_label.component
-        assert isinstance(select, ui.Select)
-        self.select = select
+        checkboxes = self.select_label.component
+        assert isinstance(checkboxes, ui.CheckboxGroup)
+        self.checkboxes = checkboxes
 
-        select.max_values = len(zones)
+        checkboxes.max_values = len(zones)
 
         for zone in zones.values():
-            label = (
-                zone["utc_offset"]
-                if zone["utc_offset"]
-                else zone["time_zone"] or "Unknown"
-            )
-            select.add_option(label=label, value=f"{label}::{zone["id"]}")
+            label = zone["utc_offset"] if zone["utc_offset"] else zone["time_zone"] or "Unknown"
+            checkboxes.add_option(label=label, value=f"{label}::{zone['id']}")
 
     async def on_submit(self, itn: discord.Interaction[Bot]) -> None:
         removed = []
         async with self.view.bot.pool.acquire() as conn:
-            for zone in self.select.values:
+            for zone in self.checkboxes.values:
                 splitted = zone.split("::")
                 zone_id = int(splitted[1])
                 await conn.execute("DELETE FROM time_zones WHERE id = ?", zone_id)
@@ -266,7 +224,7 @@ class TimeZoneRemovalModal(ui.Modal, title="Remove a Time Zone"):
                 removed.append(splitted[0])
 
         await itn.response.send_message(
-            f"The following time zones were removed:\n{", ".join(removed)}",
+            f"The following time zones were removed:\n{', '.join(removed)}",
             ephemeral=True,
         )
 
@@ -276,7 +234,7 @@ class TimeZoneModalButton(ui.Button["SettingsView"]):
         self.data: ZoneData | None = data
         super().__init__(
             style=discord.ButtonStyle.primary if data else discord.ButtonStyle.success,
-            label="Edit" if data else "Add add a time zone...",
+            label="Edit" if data else "Add a time zone...",
         )
 
     async def callback(self, itn: discord.Interaction[Bot]):
@@ -363,9 +321,7 @@ class SettingsContainer(ui.Container["SettingsView"]):
 
             self.add_item(
                 ui.Section(
-                    f"**{title}**\n"
-                    f"> Time Format: {time_format}\n"
-                    f"> Default Zone: {"Yes" if current else "No"}",
+                    f"**{title}**\n> Time Format: {time_format}\n> Default Zone: {'Yes' if current else 'No'}",
                     accessory=TimeZoneModalButton(data=zone),
                 )
             )
@@ -381,28 +337,20 @@ class TimeContainer(ui.Container):
         data: list[ZoneData],
         user: discord.User | discord.Member | None = None,
     ) -> None:
-
         opted, default_zone, default_format = self.parse_time_zones(data)
         default_time_now = dt.datetime.now(default_zone)
         formatted_times = self.format_times(opted, default_time_now)
-        time_info = self.create_time_info(
-            default_time_now, default_format, user, default_zone
-        )
+        time_info = self.create_time_info(default_time_now, default_format, user, default_zone)
 
         if not formatted_times:
-            formatted_times.append(
-                f"{f"{user.mention} is" if user else "You are"} not following any other time zones."
-            )
+            formatted_times.append(f"{f'{user.mention} is' if user else 'You are'} not following any other time zones.")
 
         super().__init__(
             ui.TextDisplay(f"### Time Information\n{time_info}"),
             ui.TextDisplay("\n".join(formatted_times)),
         )
 
-    def parse_time_zones(
-        self, data: list[ZoneData]
-    ) -> tuple[list[tuple[dt.timezone, str]], dt.timezone | None, str | None]:
-
+    def parse_time_zones(self, data: list[ZoneData]) -> tuple[list[tuple[dt.timezone, str]], dt.timezone | None, str | None]:
         opted: list[tuple[dt.timezone, str]] = []
         default_zone: dt.timezone | None = None
         default_format: str | None = None
@@ -439,15 +387,11 @@ class TimeContainer(ui.Container):
                 default_zone = dt.timezone(delta_offset, name=name)
                 default_format = zone["time_format"]
             else:
-                opted.append(
-                    (dt.timezone(delta_offset, name=name), zone["time_format"])
-                )
+                opted.append((dt.timezone(delta_offset, name=name), zone["time_format"]))
 
         return opted, default_zone, default_format
 
-    def format_times(
-        self, opted: list[tuple[dt.timezone, str]], default_time_now: dt.datetime
-    ) -> list[str]:
+    def format_times(self, opted: list[tuple[dt.timezone, str]], default_time_now: dt.datetime) -> list[str]:
         formatted_times: list[str] = []
 
         for zone, time_format in opted:
@@ -456,7 +400,7 @@ class TimeContainer(ui.Container):
 
             formatted_times.append(
                 f"[{offset_time_now.tzname()}] {offset_time_now.strftime(time_format)}"
-                f"{f" ({"+" if day > 0 else ""}{day} day)" if day else ""}"
+                f"{f' ({"+" if day > 0 else ""}{day} day)' if day else ''}"
             )
 
         return formatted_times
@@ -470,33 +414,27 @@ class TimeContainer(ui.Container):
     ) -> str:
         if not default_zone:
             return (
-                f"{f"{user.mention} does" if user else "You do"} not have a default time zone set.\n"
-                f"Date: {default_time_now.strftime("%Y-%m-%d")}"
+                f"{f'{user.mention} does' if user else 'You do'} not have a default time zone set.\n"
+                f"Date: {default_time_now.strftime('%Y-%m-%d')}"
             )
 
         return (
-            f"Date and Time: {default_time_now.strftime(f"%Y-%m-%d at **{default_format}**")}\n"
-            f"{f"{user.mention}'s" if user else "Your"} time offset is: {default_time_now.tzname()}"
+            f"Date and Time: {default_time_now.strftime(f'%Y-%m-%d at **{default_format}**')}\n"
+            f"{f"{user.mention}'s" if user else 'Your'} time offset is: {default_time_now.tzname()}"
         )
 
 
 class Commands(commands.Cog):
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.times_message_command = app_commands.ContextMenu(
-            name="Show Time Zones", callback=self.ctx_menu_callback_msg
-        )
-        self.times_user_command = app_commands.ContextMenu(
-            name="Show Time Zones", callback=self.ctx_menu_callback
-        )
+        self.times_message_command = app_commands.ContextMenu(name="Show Time Zones", callback=self.ctx_menu_callback_msg)
+        self.times_user_command = app_commands.ContextMenu(name="Show Time Zones", callback=self.ctx_menu_callback)
         bot.tree.add_command(self.times_message_command)
         bot.tree.add_command(self.times_user_command)
 
     @app_commands.command()
     @app_commands.describe(user="Whose time zones you want to see.")
-    async def times(
-        self, itn: discord.Interaction[Bot], user: discord.User | discord.Member | None
-    ):
+    async def times(self, itn: discord.Interaction[Bot], user: discord.User | discord.Member | None):
         """Shows all your time zones."""
         async with self.bot.pool.acquire() as conn:
             time_zones: list[ZoneData] = await conn.fetchall(
@@ -521,9 +459,7 @@ class Commands(commands.Cog):
         view.add_item(TimeContainer(data=time_zones, user=user))
         await itn.response.send_message(view=view, ephemeral=True)
 
-    async def ctx_menu_callback(
-        self, itn: discord.Interaction[Bot], member: discord.Member | discord.User
-    ):
+    async def ctx_menu_callback(self, itn: discord.Interaction[Bot], member: discord.Member | discord.User):
         async with self.bot.pool.acquire() as conn:
             time_zones: list[ZoneData] = await conn.fetchall(
                 "SELECT * FROM time_zones WHERE user_id = ?",
@@ -541,18 +477,14 @@ class Commands(commands.Cog):
         view.add_item(TimeContainer(data=time_zones, user=member))
         await itn.response.send_message(view=view, ephemeral=True)
 
-    async def ctx_menu_callback_msg(
-        self, itn: discord.Interaction[Bot], message: discord.Message
-    ):
+    async def ctx_menu_callback_msg(self, itn: discord.Interaction[Bot], message: discord.Message):
         await self.ctx_menu_callback(itn, message.author)
 
     @app_commands.command()
     async def settings(self, itn: discord.Interaction[Bot]):
         """Edit your time zones."""
         async with self.bot.pool.acquire() as conn:
-            time_zones: list[ZoneData] = await conn.fetchall(
-                "SELECT * FROM time_zones WHERE user_id = ?", itn.user.id
-            )  # type: ignore
+            time_zones: list[ZoneData] = await conn.fetchall("SELECT * FROM time_zones WHERE user_id = ?", itn.user.id)  # type: ignore
 
         view = SettingsView(bot=self.bot, zones=time_zones)
 
