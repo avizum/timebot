@@ -152,7 +152,7 @@ class TimeZoneModal(ui.Modal, title="Time Zone Information"):
 
         async with self.bot.pool.acquire() as conn:
             for zone in self.view.data.values():
-                if (zone["time_zone"] == time_zone or zone["utc_offset"] == time_zone) and not self.data:
+                if (zone["time_zone"] == time_zone or zone["utc_offset"] == utc_offset) and not self.data:
                     return await itn.response.send_message("You already have this time zone set up.", ephemeral=True)
                 if default_zone and zone["default_zone"]:
                     zone["default_zone"] = False
