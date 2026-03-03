@@ -29,6 +29,8 @@ FORMAT_MAP: Mapping[str, str] = {
     "%H:%M:%S": "24 hour with seconds",
 }
 
+ZONE_MAP: Mapping[str, str] = {zone.lower(): zone for zone in zoneinfo.available_timezones()}
+
 
 class TimeZoneModal(ui.Modal, title="Time Zone Information"):
     time_zone = ui.Label(
@@ -120,8 +122,8 @@ class TimeZoneModal(ui.Modal, title="Time Zone Information"):
         default_zone = self.default_zone.component.value
 
         try:
-            time_zone = str(zoneinfo.ZoneInfo(time_zone))
-        except zoneinfo.ZoneInfoNotFoundError:
+            time_zone = zoneinfo.ZoneInfo(ZONE_MAP[time_zone.lower()]).key
+        except KeyError:
             split = time_zone.split(":")
             if len(split) > 1:
                 hours = abs(int(split[0]))
@@ -152,7 +154,9 @@ class TimeZoneModal(ui.Modal, title="Time Zone Information"):
 
         async with self.bot.pool.acquire() as conn:
             for zone in self.view.data.values():
-                if (zone["time_zone"] == time_zone or zone["utc_offset"] == utc_offset) and not self.data:
+                data_zone = zone["time_zone"]
+                data_offset = zone["utc_offset"]
+                if ((data_zone and data_zone == time_zone) or (data_offset and data_offset == utc_offset)) and not self.data:
                     return await itn.response.send_message("You already have this time zone set up.", ephemeral=True)
                 if default_zone and zone["default_zone"]:
                     zone["default_zone"] = False
