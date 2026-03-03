@@ -125,7 +125,7 @@ class TimeZoneModal(ui.Modal, title="Time Zone Information"):
             time_zone = zoneinfo.ZoneInfo(ZONE_MAP[time_zone.lower()]).key
         except KeyError:
             split = time_zone.split(":")
-            if len(split) > 1:
+            if len(split) > 1 and len(time_zone) == 6:
                 hours = abs(int(split[0]))
                 minutes = int(split[1])
                 if hours > 24 or (hours == 24 and minutes):
@@ -148,7 +148,7 @@ class TimeZoneModal(ui.Modal, title="Time Zone Information"):
                 return await itn.response.send_message(
                     "The time zone you entered is invalid.\n"
                     "Check your capitalization, spelling, or see all the valid time zones [here.](<https://en.wikipedia.org/wiki/List_of_tz_database_time_zones#List>)\n"
-                    "If you are trying to use a UTC offset, ensure you are using the format ±HH:MM.",
+                    "If you are trying to use a UTC offset, ensure you are using the format ±HH:MM. (-5 hours -> -05:00)",
                     ephemeral=True,
                 )
 
